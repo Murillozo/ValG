@@ -1,5 +1,6 @@
 package com.orcafacil.app
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Geocoder
@@ -167,6 +168,7 @@ fun BigButton(text: String, onClick: () -> Unit) {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun LocationField(value: String, onValueChange: (String) -> Unit, onMessage: (String) -> Unit = {}) {
     val context = LocalContext.current
     val cityOptions = remember {
@@ -291,6 +293,7 @@ fun ProjectsScreen(vm: MainViewModel) {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun MaterialsScreen(vm: MainViewModel, onUseMaterial: (MaterialEntity) -> Unit) {
     val list by vm.filteredMaterials.collectAsState()
     val categories = list.map { it.categoria }.distinct().sorted()
