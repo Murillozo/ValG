@@ -173,13 +173,8 @@ fun LocationField(value: String, onValueChange: (String) -> Unit, onMessage: (St
     val context = LocalContext.current
     val cityOptions = remember {
         listOf(
+            "Goiânia - GO",
             "São Paulo - SP",
-            "Rio de Janeiro - RJ",
-            "Belo Horizonte - MG",
-            "Curitiba - PR",
-            "Porto Alegre - RS",
-            "Salvador - BA",
-            "Recife - PE",
             "Brasília - DF"
         )
     }
