@@ -409,7 +409,13 @@ fun CreateBudgetScreen(vm: MainViewModel, showMsg: (String) -> Unit, onDone: () 
             OutlinedTextField(titulo, { titulo = it }, label = { Text("Título*") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(cliente, { cliente = it }, label = { Text("Cliente*") }, modifier = Modifier.fillMaxWidth())
             LocationField(value = local, onValueChange = { local = it }, onMessage = showMsg)
-            OutlinedTextField(maoDeObra, { maoDeObra = it }, label = { Text("Mão de obra (R$)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                maoDeObra,
+                { maoDeObra = it },
+                label = { Text("Mão de obra (R$)") },
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
             OutlinedTextField(obs, { obs = it }, label = { Text("Observações") }, modifier = Modifier.fillMaxWidth())
 
             Text("Adicionar item", fontWeight = FontWeight.Bold)
