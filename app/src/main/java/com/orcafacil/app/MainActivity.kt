@@ -1,12 +1,17 @@
 package com.orcafacil.app
 
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Bundle
-import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -55,8 +60,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.orcafacil.app.data.BudgetEntity
 import com.orcafacil.app.data.MaterialEntity
@@ -66,6 +74,7 @@ import com.orcafacil.app.ui.theme.OrcaFacilTheme
 import com.orcafacil.app.viewmodel.DraftBudgetItem
 import com.orcafacil.app.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 enum class AppTab { HOME, PROJETOS, MATERIAIS, ORCAMENTOS, NOVO }
 
@@ -106,7 +115,10 @@ fun AppScreen(vm: MainViewModel) {
             when (tab) {
                 AppTab.HOME -> HomeScreen(onNovo = { tab = AppTab.NOVO }, onProjetos = { tab = AppTab.PROJETOS }, onMateriais = { tab = AppTab.MATERIAIS }, onRecentes = { tab = AppTab.ORCAMENTOS })
                 AppTab.PROJETOS -> ProjectsScreen(vm)
-                AppTab.MATERIAIS -> MaterialsScreen(vm)
+                AppTab.MATERIAIS -> MaterialsScreen(vm, onUseMaterial = {
+                    vm.selectMaterialForBudget(it)
+                    tab = AppTab.NOVO
+                })
                 AppTab.ORCAMENTOS -> BudgetsScreen(vm, onNovo = { tab = AppTab.NOVO }, onShare = { uri ->
                     val intent = Intent(Intent.ACTION_SEND).apply {
                         type = "application/pdf"
@@ -124,7 +136,7 @@ fun AppScreen(vm: MainViewModel) {
                             context.startActivity(Intent.createChooser(generic, "Compartilhar orçamento"))
                         }
                 }, showMsg = { msg -> scope.launch { snackbar.showSnackbar(msg) } })
-                AppTab.NOVO -> CreateBudgetScreen(vm, onDone = {
+                AppTab.NOVO -> CreateBudgetScreen(vm, showMsg = { msg -> scope.launch { snackbar.showSnackbar(msg) } }, onDone = {
                     scope.launch { snackbar.showSnackbar("Orçamento salvo com sucesso") }
                     tab = AppTab.ORCAMENTOS
                 })
@@ -156,13 +168,101 @@ fun BigButton(text: String, onClick: () -> Unit) {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
+fun LocationField(value: String, onValueChange: (String) -> Unit, onMessage: (String) -> Unit = {}) {
+    val context = LocalContext.current
+    val cityOptions = remember {
+        listOf(
+            "São Paulo - SP",
+            "Rio de Janeiro - RJ",
+            "Belo Horizonte - MG",
+            "Curitiba - PR",
+            "Porto Alegre - RS",
+            "Salvador - BA",
+            "Recife - PE",
+            "Brasília - DF"
+        )
+    }
+    var cityExpanded by remember { mutableStateOf(false) }
+    var suggestedCurrentLocation by remember { mutableStateOf<String?>(null) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        if (results.values.any { it }) {
+            suggestedCurrentLocation = resolveCurrentLocationText(context)
+            if (suggestedCurrentLocation == null) onMessage("Não foi possível obter a localização atual.")
+        } else {
+            onMessage("Permita a localização para sugerir automaticamente.")
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ExposedDropdownMenuBox(expanded = cityExpanded, onExpandedChange = { cityExpanded = it }) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                label = { Text("Local*") },
+                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cityExpanded) }
+            )
+            ExposedDropdownMenu(expanded = cityExpanded, onDismissRequest = { cityExpanded = false }) {
+                cityOptions.forEach { option ->
+                    DropdownMenuItem(text = { Text(option) }, onClick = {
+                        onValueChange(option)
+                        cityExpanded = false
+                    })
+                }
+            }
+        }
+        Button(onClick = {
+            val granted = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                suggestedCurrentLocation = resolveCurrentLocationText(context)
+                if (suggestedCurrentLocation == null) onMessage("Não foi possível obter a localização atual.")
+            } else {
+                permissionLauncher.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
+            }
+        }) { Text("Usar localização atual") }
+
+        suggestedCurrentLocation?.let { localAtual ->
+            Text("Local detectado: $localAtual. Esse é o local da obra/projeto?")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    onValueChange(localAtual)
+                    suggestedCurrentLocation = null
+                }) { Text("Sim, usar este") }
+                Button(onClick = { suggestedCurrentLocation = null }) { Text("Outro local") }
+            }
+        }
+    }
+}
+
+private fun resolveCurrentLocationText(context: Context): String? {
+    val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+    val providers = manager.getProviders(true)
+    val bestLocation = providers
+        .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
+        .maxByOrNull { it.time } ?: return null
+    return bestLocation.toReadableAddress(context)
+}
+
+private fun Location.toReadableAddress(context: Context): String {
+    return runCatching {
+        val geocoder = Geocoder(context, Locale("pt", "BR"))
+        @Suppress("DEPRECATION")
+        val result = geocoder.getFromLocation(latitude, longitude, 1)?.firstOrNull()
+        val city = result?.subAdminArea ?: result?.locality
+        val state = result?.adminArea
+        listOfNotNull(city, state).joinToString(" - ").ifBlank { "$latitude, $longitude" }
+    }.getOrElse { "$latitude, $longitude" }
+}
+
+@Composable
 fun ProjectsScreen(vm: MainViewModel) {
     val list by vm.filteredProjects.collectAsState()
     var nome by remember { mutableStateOf("") }
     var cliente by remember { mutableStateOf("") }
     var local by remember { mutableStateOf("") }
     var telefone by remember { mutableStateOf("") }
-    var desc by remember { mutableStateOf("") }
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
@@ -170,12 +270,11 @@ fun ProjectsScreen(vm: MainViewModel) {
             OutlinedTextField(nome, { nome = it }, label = { Text("Nome do projeto*") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(cliente, { cliente = it }, label = { Text("Cliente*") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(telefone, { telefone = it }, label = { Text("Telefone") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(local, { local = it }, label = { Text("Local*") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(desc, { desc = it }, label = { Text("Descrição") }, modifier = Modifier.fillMaxWidth())
+            LocationField(value = local, onValueChange = { local = it })
             BigButton("Salvar Projeto") {
                 if (nome.isBlank() || cliente.isBlank() || local.isBlank()) return@BigButton
-                vm.saveProject(ProjectEntity(nome = nome, cliente = cliente, telefone = telefone, local = local, data = vm.hojeBr(), descricao = desc))
-                nome = ""; cliente = ""; telefone = ""; local = ""; desc = ""
+                vm.saveProject(ProjectEntity(nome = nome, cliente = cliente, telefone = telefone, local = local, data = vm.hojeBr(), descricao = ""))
+                nome = ""; cliente = ""; telefone = ""; local = ""
             }
         }
         items(list) {
@@ -194,20 +293,45 @@ fun ProjectsScreen(vm: MainViewModel) {
 }
 
 @Composable
-fun MaterialsScreen(vm: MainViewModel) {
+@OptIn(ExperimentalMaterial3Api::class)
+fun MaterialsScreen(vm: MainViewModel, onUseMaterial: (MaterialEntity) -> Unit) {
     val list by vm.filteredMaterials.collectAsState()
+    val categories = list.map { it.categoria }.distinct().sorted()
+    val commonUnits = listOf("un", "m", "m²", "m³", "kg", "g", "l", "ml", "cx", "pct", "rolo", "kit")
     var nome by remember { mutableStateOf("") }
     var cat by remember { mutableStateOf("") }
     var un by remember { mutableStateOf("un") }
     var valor by remember { mutableStateOf("") }
+    var catExpanded by remember { mutableStateOf(false) }
+    var unitExpanded by remember { mutableStateOf(false) }
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Text("Equipamentos / Materiais", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             OutlinedTextField(nome, { nome = it }, label = { Text("Nome do item*") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(cat, { cat = it }, label = { Text("Categoria*") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(un, { un = it }, label = { Text("Unidade") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(valor, { valor = it }, label = { Text("Valor unitário (R$)") }, modifier = Modifier.fillMaxWidth())
+            ExposedDropdownMenuBox(expanded = catExpanded, onExpandedChange = { catExpanded = it }) {
+                OutlinedTextField(cat, { cat = it }, label = { Text("Categoria*") }, modifier = Modifier.menuAnchor().fillMaxWidth(), trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = catExpanded) })
+                ExposedDropdownMenu(expanded = catExpanded, onDismissRequest = { catExpanded = false }) {
+                    categories.forEach { option ->
+                        DropdownMenuItem(text = { Text(option) }, onClick = {
+                            cat = option
+                            catExpanded = false
+                        })
+                    }
+                }
+            }
+            ExposedDropdownMenuBox(expanded = unitExpanded, onExpandedChange = { unitExpanded = it }) {
+                OutlinedTextField(un, { un = it }, label = { Text("Unidade") }, modifier = Modifier.menuAnchor().fillMaxWidth(), trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = unitExpanded) })
+                ExposedDropdownMenu(expanded = unitExpanded, onDismissRequest = { unitExpanded = false }) {
+                    commonUnits.forEach { option ->
+                        DropdownMenuItem(text = { Text(option) }, onClick = {
+                            un = option
+                            unitExpanded = false
+                        })
+                    }
+                }
+            }
+            OutlinedTextField(valor, { valor = it }, label = { Text("Valor unitário (R$)") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             BigButton("Salvar Material") {
                 if (nome.isBlank() || cat.isBlank()) return@BigButton
                 vm.saveMaterial(MaterialEntity(nome = nome, categoria = cat, unidade = un, valorUnitario = valor.replace(',', '.').toDoubleOrNull() ?: 0.0))
@@ -221,6 +345,7 @@ fun MaterialsScreen(vm: MainViewModel) {
                         Text(it.nome, fontWeight = FontWeight.Bold)
                         Text("${it.categoria} • ${it.unidade} • ${vm.moeda(it.valorUnitario)}")
                     }
+                    Button(onClick = { onUseMaterial(it) }) { Text("Usar") }
                     IconButton(onClick = { vm.deleteMaterial(it) }) { Text("🗑") }
                 }
             }
@@ -230,12 +355,14 @@ fun MaterialsScreen(vm: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CreateBudgetScreen(vm: MainViewModel, onDone: () -> Unit) {
+fun CreateBudgetScreen(vm: MainViewModel, showMsg: (String) -> Unit, onDone: () -> Unit) {
     val projects by vm.projects.collectAsState()
     val materials by vm.materials.collectAsState()
     val items by vm.draftItems.collectAsState()
+    val selectedMaterial by vm.selectedMaterialForBudget.collectAsState()
 
     var expanded by remember { mutableStateOf(false) }
+    var materialExpanded by remember { mutableStateOf(false) }
     var projectId by remember { mutableStateOf<Long?>(null) }
     var titulo by remember { mutableStateOf("") }
     var cliente by remember { mutableStateOf("") }
@@ -246,6 +373,16 @@ fun CreateBudgetScreen(vm: MainViewModel, onDone: () -> Unit) {
     var qtd by remember { mutableStateOf("1") }
     var un by remember { mutableStateOf("un") }
     var vUnit by remember { mutableStateOf("0") }
+    var selectedMaterialId by remember { mutableStateOf<Long?>(null) }
+
+    LaunchedEffect(selectedMaterial?.id) {
+        selectedMaterial?.let {
+            selectedMaterialId = it.id
+            itemDesc = it.nome
+            un = it.unidade
+            vUnit = it.valorUnitario.toString()
+        }
+    }
 
     val totalItens = items.sumOf { (it.quantidade.toDoubleOrNull() ?: 0.0) * (it.valorUnitario.toDoubleOrNull() ?: 0.0) }
     val total = totalItens + (maoDeObra.toDoubleOrNull() ?: 0.0)
@@ -276,28 +413,48 @@ fun CreateBudgetScreen(vm: MainViewModel, onDone: () -> Unit) {
             }
             OutlinedTextField(titulo, { titulo = it }, label = { Text("Título*") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(cliente, { cliente = it }, label = { Text("Cliente*") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(local, { local = it }, label = { Text("Local da obra*") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(maoDeObra, { maoDeObra = it }, label = { Text("Mão de obra (R$)") }, modifier = Modifier.fillMaxWidth())
+            LocationField(value = local, onValueChange = { local = it }, onMessage = showMsg)
+            OutlinedTextField(
+                maoDeObra,
+                { maoDeObra = it },
+                label = { Text("Mão de obra (R$)") },
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
             OutlinedTextField(obs, { obs = it }, label = { Text("Observações") }, modifier = Modifier.fillMaxWidth())
 
             Text("Adicionar item", fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button(onClick = {
-                    materials.firstOrNull()?.let {
-                        itemDesc = it.nome; un = it.unidade; vUnit = it.valorUnitario.toString()
+            ExposedDropdownMenuBox(expanded = materialExpanded, onExpandedChange = { materialExpanded = it }) {
+                OutlinedTextField(
+                    value = materials.firstOrNull { it.id == selectedMaterialId }?.nome ?: "",
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(materialExpanded) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    label = { Text("Material vinculado") }
+                )
+                ExposedDropdownMenu(expanded = materialExpanded, onDismissRequest = { materialExpanded = false }) {
+                    materials.forEach { m ->
+                        DropdownMenuItem(text = { Text("${m.nome} (${vm.moeda(m.valorUnitario)}/${m.unidade})") }, onClick = {
+                            selectedMaterialId = m.id
+                            itemDesc = m.nome
+                            un = m.unidade
+                            vUnit = m.valorUnitario.toString()
+                            materialExpanded = false
+                        })
                     }
-                }) { Text("Usar material") }
+                }
             }
             OutlinedTextField(itemDesc, { itemDesc = it }, label = { Text("Descrição*") }, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(qtd, { qtd = it }, label = { Text("Qtd") }, modifier = Modifier.weight(1f))
+                OutlinedTextField(qtd, { qtd = it }, label = { Text("Qtd") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 OutlinedTextField(un, { un = it }, label = { Text("Un") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(vUnit, { vUnit = it }, label = { Text("Unitário") }, modifier = Modifier.weight(1f))
+                OutlinedTextField(vUnit, { vUnit = it }, label = { Text("Unitário") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
             BigButton("Adicionar Item") {
                 if (itemDesc.isBlank()) return@BigButton
                 vm.addDraftItem(DraftBudgetItem(itemDesc, qtd, un, vUnit.replace(',', '.')))
-                itemDesc = ""; qtd = "1"; un = "un"; vUnit = "0"
+                itemDesc = ""; qtd = "1"; un = "un"; vUnit = "0"; selectedMaterialId = null
             }
         }
 
