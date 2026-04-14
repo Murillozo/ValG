@@ -54,6 +54,7 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val draftItems = MutableStateFlow(listOf<DraftBudgetItem>())
+    val selectedMaterialForBudget = MutableStateFlow<MaterialEntity?>(null)
 
     fun addDraftItem(item: DraftBudgetItem) {
         draftItems.value = draftItems.value + item
@@ -65,6 +66,11 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun clearDraft() {
         draftItems.value = emptyList()
+        selectedMaterialForBudget.value = null
+    }
+
+    fun selectMaterialForBudget(material: MaterialEntity?) {
+        selectedMaterialForBudget.value = material
     }
 
     fun moeda(valor: Double): String = NumberFormat.getCurrencyInstance(Locale("pt", "BR")).format(valor)
